@@ -49,7 +49,6 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="NativeLibrary.cs" />
-    <Compile Include="NativeLibraryMisc.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
   </ItemGroup>
   <ItemGroup>
