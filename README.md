@@ -21,6 +21,7 @@ The NativeLibrary object can be very useful in the following scenarios:
 Sample code
 ===========
 
+```
 using System;
 using System.Runtime.InteropServices;
 
@@ -43,3 +44,4 @@ public class Program
 		...
 	}
 }
+```
