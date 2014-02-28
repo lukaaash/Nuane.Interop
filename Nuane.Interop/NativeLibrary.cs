@@ -27,6 +27,7 @@ namespace Nuane.Interop
 	/// </summary>
 	public class NativeLibrary : IDisposable
     {
+		private readonly bool _windows;
 		private readonly IntPtr _handle;
 		private bool _disposed;
 
@@ -94,26 +95,40 @@ namespace Nuane.Interop
 			if (string.IsNullOrWhiteSpace(name))
 				throw new ArgumentException("Name cannot be empty.", "name");
 
-			if (Environment.OSVersion.Platform != PlatformID.Win32NT)
-				throw new ApplicationException(ErrorUnsupportedPlatform);
-			
-			if (!Path.HasExtension(name) && string.IsNullOrWhiteSpace(Path.GetDirectoryName(name)))
-				name += ".dll";
+			bool addExtension = !Path.HasExtension(name) && string.IsNullOrWhiteSpace(Path.GetDirectoryName(name));
+			bool windows;
+
+			switch (Environment.OSVersion.Platform)
+			{
+				case PlatformID.MacOSX:
+				case PlatformID.Unix:
+					windows = false;
+					if (addExtension)
+						name += ".so";
+					break;
+				case PlatformID.Win32NT:
+					windows = true;
+					if (addExtension)
+						name += ".dll";
+					break;
+				default:
+					throw new ApplicationException(ErrorUnsupportedPlatform);
+			}
 
 			string path;
 			if (!Path.IsPathRooted(name))
-				path = SearchLocations(name, options, callingAssembly);
+				path = SearchLocations(name, options, windows, callingAssembly);
 			else
 				path = name;
 
-			var library = new NativeLibrary(path, failOnError);
+			var library = new NativeLibrary(path, windows, failOnError);
 			if (library._handle == IntPtr.Zero)
 				return null;
 
 			return library;
 		}
 
-		private static string SearchLocations(string name, NativeLibraryLoadOptions options, Assembly callingAssembly)
+		private static string SearchLocations(string name, NativeLibraryLoadOptions options, bool windows, Assembly callingAssembly)
 		{
 			if ((options & NativeLibraryLoadOptions.SearchAll) == 0)
 				return name;
@@ -134,13 +149,13 @@ namespace Nuane.Interop
 				switch (location & options)
 				{
 					case NativeLibraryLoadOptions.SearchAssemblyDirectory:
-						path = SearchFile(assemblyDirectory, name, nameIsPath);
+						path = SearchFile(assemblyDirectory, name, nameIsPath, windows);
 						break;
 					case NativeLibraryLoadOptions.SearchExecutableDirectory:
-						path = SearchFile(GetExecutableDirectory(), name, nameIsPath);
+						path = SearchFile(GetExecutableDirectory(), name, nameIsPath, windows);
 						break;
 					case NativeLibraryLoadOptions.SearchCurrentDirectory:
-						path = SearchFile(Directory.GetCurrentDirectory(), name, nameIsPath);
+						path = SearchFile(Directory.GetCurrentDirectory(), name, nameIsPath, windows);
 						break;
 				}
 				if (path != null)
@@ -150,7 +165,7 @@ namespace Nuane.Interop
 			return name;
 		}
 
-		private static string SearchFile(string location, string name, bool nameIsPath)
+		private static string SearchFile(string location, string name, bool nameIsPath, bool windows)
 		{
 			if (location == null)
 				return null;
@@ -162,18 +177,27 @@ namespace Nuane.Interop
 			if (nameIsPath)
 				return null;
 
-			if (TryCheckExists(location, ExtendName(name, PlatformSuffix), out path))
+			if (TryCheckExists(location, ExtendName("", name, PlatformSuffix), out path))
 				return path;
+
+			if (!windows && !name.StartsWith(LibPrefix, StringComparison.Ordinal))
+			{
+				if (TryCheckExists(location, ExtendName(LibPrefix, name, ""), out path))
+					return path;
+
+				if (TryCheckExists(location, ExtendName(LibPrefix, name, PlatformSuffix), out path))
+					return path;
+			}
 
 			return null;
 		}
 
-		private static string ExtendName(string name, string suffix)
+		private static string ExtendName(string prefix, string name, string suffix)
 		{
 			if (!Path.HasExtension(name))
-				return name + suffix;
+				return prefix + name + suffix;
 
-			return Path.GetFileNameWithoutExtension(name) + suffix + Path.GetExtension(name);
+			return prefix + Path.GetFileNameWithoutExtension(name) + suffix + Path.GetExtension(name);
 		}
 
 		private static bool TryCheckExists(string basePath, string fileName, out string filePath)
@@ -213,11 +237,23 @@ namespace Nuane.Interop
 			return _executableDirectory;
 		}
 
-		private NativeLibrary(string name, bool failOnError)
+		private NativeLibrary(string name, bool windows, bool failOnError)
 		{
-			_handle = NativeMethods.LoadLibrary(name);
-			if (_handle == IntPtr.Zero && failOnError)
-				throw new NativeLibraryException(ErrorCannotLoadLibrary + " " + Marshal.GetExceptionForHR(Marshal.GetHRForLastWin32Error()).Message);
+			_windows = windows;
+
+			if (_windows)
+			{
+				_handle = NativeMethods.LoadLibrary(name);
+				if (_handle == IntPtr.Zero && failOnError)
+					throw new NativeLibraryException(ErrorCannotLoadLibrary + " " + Marshal.GetExceptionForHR(Marshal.GetHRForLastWin32Error()).Message);
+			}
+			else
+			{
+				_handle = NativeMethods.dlopen(name, NativeMethods.RTLD_GLOBAL | NativeMethods.RTLD_NOW);
+				if (_handle == IntPtr.Zero && failOnError)
+					throw new NativeLibraryException(ErrorCannotLoadLibrary + " " + Marshal.PtrToStringAnsi(NativeMethods.dlerror()));
+			}
+
 		}
 
 		/// <summary>
@@ -292,10 +328,20 @@ namespace Nuane.Interop
 			if (string.IsNullOrWhiteSpace(name))
 				throw new ArgumentException("Name cannot be empty.", "name");
 
-			IntPtr ptr = NativeMethods.GetProcAddress(_handle, name);
-			if (ptr == IntPtr.Zero && failOnError)
-				throw new NativeLibraryException(ErrorFunctionNotFound + " " + Marshal.GetExceptionForHR(Marshal.GetHRForLastWin32Error()).Message);
-			
+			IntPtr ptr;
+			if (_windows)
+			{
+				ptr = NativeMethods.GetProcAddress(_handle, name);
+				if (ptr == IntPtr.Zero && failOnError)
+					throw new NativeLibraryException(ErrorFunctionNotFound + " " + Marshal.GetExceptionForHR(Marshal.GetHRForLastWin32Error()).Message);
+			}
+			else
+			{
+				ptr = NativeMethods.dlsym(_handle, name);
+				if (ptr == IntPtr.Zero && failOnError)
+					throw new NativeLibraryException(ErrorFunctionNotFound + " " + Marshal.PtrToStringAnsi(NativeMethods.dlerror()));
+			}
+
 			return ptr;
 		}
 
@@ -332,16 +378,18 @@ namespace Nuane.Interop
 
 			_disposed = true;
 
-			NativeMethods.FreeLibrary(_handle);
+			if (_windows)
+				NativeMethods.FreeLibrary(_handle);
+			else
+				NativeMethods.dlclose(_handle);
 
 			//GC.SuppressFinalize(this);
 		}
 
 		//~NativeLibrary()
 		//{
-		// This finalizer is empty by design. We don't want the garbage collector to unload any libraries
-		// that might still be needed by function pointers and delegates. We only want to unload the library
-		// when the Dispose method is called explicitly.
+		// Finalizer is empty by design. We don't want the garbage collector to unload any libraries that might still be needed by function pointers and delegates.
+		// We only want to unload the library when the Dispose method is called explicitly.
 		//}
 	}
 

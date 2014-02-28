@@ -89,6 +89,8 @@ namespace Nuane.Interop
 	/// </summary>
 	internal static class NativeMethods
 	{
+		#region Windows
+
 		//HMODULE LoadLibrary(LPCTSTR lpFileName)
 		[DllImport("kernel32", SetLastError = true, CharSet = CharSet.Unicode)]
 		public static extern IntPtr LoadLibrary(string lpFileName);
@@ -100,5 +102,33 @@ namespace Nuane.Interop
 		//BOOL FreeLibrary(HMODULE hModule);
 		[DllImport("kernel32", SetLastError = true)]
 		public static extern int FreeLibrary(IntPtr hModule);
+
+		#endregion
+
+		#region Linux, *BSD, Mac OS X, Solaris, etc.
+
+		// resolve all undefined symbols in the library
+		public const int RTLD_NOW = 2;
+
+		// make symbols defined by this library available for symbol resolution of subsequently loaded libraries
+		public const int RTLD_GLOBAL = 0x100;
+
+		//void *dlopen(const char *filename, int flag)
+		[DllImport("libdl")]
+		public static extern IntPtr dlopen(string filename, int flag);
+
+		//char *dlerror(void)
+		[DllImport("libdl")]
+		public static extern IntPtr dlerror();
+
+		//void *dlsym(void *handle, const char *symbol)
+		[DllImport("libdl")]
+		public static extern IntPtr dlsym(IntPtr handle, string symbol);
+
+		//int dlclose(void *handle)
+		[DllImport("libdl")]
+		public static extern int dlclose(IntPtr handle);
+
+		#endregion
 	}
 }
